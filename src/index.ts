@@ -4,7 +4,6 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
-import bcrypt from 'bcryptjs'; // ✅ use bcryptjs
 import { Database } from 'sqlite3';
 
 interface User {
@@ -79,6 +78,7 @@ async function main() {
     socket.on('sendMessage', async (data) => {
       try {
         const { user_id, content } = data;
+
         await db.run(
           'INSERT INTO messages (user_id, content) VALUES (?, ?)',
           [user_id, content]
@@ -130,11 +130,10 @@ async function main() {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
-
+      // ⚠️ No hashing here
       const result = await db.run(
         'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-        [username, email, hashedPassword]
+        [username, email, password]
       );
 
       res.status(201).json({
@@ -162,7 +161,8 @@ async function main() {
 
       const user = await db.get<User>('SELECT * FROM users WHERE email = ?', [email]);
 
-      if (!user || !(await bcrypt.compare(password, user.password))) {
+      // ⚠️ Compare plain text passwords
+      if (!user || password !== user.password) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
@@ -214,3 +214,4 @@ main().catch((err: Error) => {
   console.error('Server startup error:', err);
   process.exit(1);
 });
+
