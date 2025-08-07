@@ -4,10 +4,9 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs'; // ✅ use bcryptjs
 import { Database } from 'sqlite3';
 
-// Type definitions for your database
 interface User {
   id: number;
   username: string;
@@ -21,7 +20,7 @@ interface Message {
   user_id: number;
   content: string;
   created_at: string;
-  username?: string; // Joined field from users table
+  username?: string;
 }
 
 interface CustomError extends Error {
@@ -43,7 +42,7 @@ async function initializeDB() {
         password TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-      
+
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -61,11 +60,12 @@ async function initializeDB() {
 }
 
 async function main() {
+  const db = await initializeDB();
   const app: Express = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
-      origin: "http://localhost:3000",
+      origin: "*",
       methods: ["GET", "POST"]
     }
   });
@@ -73,33 +73,17 @@ async function main() {
   app.use(cors());
   app.use(express.json());
 
-  // Initialize database connection
-  let db;
-  try {
-    db = await initializeDB();
-    console.log('Database connection initialized');
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
-  }
-
-  // Socket.IO connection
   io.on('connection', (socket) => {
-    console.log('A user connected');
+    console.log('User connected');
 
-    socket.on('sendMessage', async (data: { userId: number; content: string }) => {
+    socket.on('sendMessage', async (data) => {
       try {
-        const { userId, content } = data;
-        
-        if (!userId || !content) {
-          throw new Error('Missing required fields');
-        }
-        
+        const { user_id, content } = data;
         await db.run(
           'INSERT INTO messages (user_id, content) VALUES (?, ?)',
-          [userId, content]
+          [user_id, content]
         );
-        
+
         const message = await db.get<Message & { username: string }>(`
           SELECT m.*, u.username 
           FROM messages m
@@ -107,7 +91,7 @@ async function main() {
           ORDER BY m.id DESC
           LIMIT 1
         `);
-        
+
         io.emit('newMessage', message);
       } catch (err) {
         const error = err as Error;
@@ -121,7 +105,6 @@ async function main() {
     });
   });
 
-  // REST API endpoints
   app.get('/api/messages', async (req: Request, res: Response) => {
     try {
       const messages = await db.all<Array<Message & { username: string }>>(`
@@ -142,22 +125,22 @@ async function main() {
   app.post('/api/register', async (req: Request, res: Response) => {
     try {
       const { username, email, password } = req.body;
-      
+
       if (!username || !email || !password) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       const result = await db.run(
         'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
         [username, email, hashedPassword]
       );
-      
-      res.status(201).json({ 
-        id: result.lastID, 
-        username, 
-        email 
+
+      res.status(201).json({
+        id: result.lastID,
+        username,
+        email
       });
     } catch (err) {
       const error = err as Error;
@@ -172,18 +155,17 @@ async function main() {
   app.post('/api/login', async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
-      
+
       if (!email || !password) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
       const user = await db.get<User>('SELECT * FROM users WHERE email = ?', [email]);
-      
+
       if (!user || !(await bcrypt.compare(password, user.password))) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      // Don't return password in response
       const { password: _, ...userWithoutPassword } = user;
       res.json(userWithoutPassword);
     } catch (err) {
@@ -217,13 +199,12 @@ async function main() {
     }
   });
 
-  // Error handling middleware
   app.use((err: CustomError, req: Request, res: Response, next: NextFunction) => {
     console.error(err.stack);
     res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
   });
 
-  const PORT = 4000;
+  const PORT = process.env.PORT || 4000;
   httpServer.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
